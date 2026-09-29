@@ -1,0 +1,51 @@
+name: Smoke dev
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Render and check API
+        env:
+          API_URL: ${{ vars.DEV_API_URL || 'https://springbootbackend-bk-dev.onrender.com' }}
+          WEB_URL: ${{ vars.DEV_WEB_URL || 'https://reactfrontend-bk-dev.onrender.com' }}
+        run: |
+          set -e
+          API_URL=${API_URL%/}
+          WEB_URL=${WEB_URL%/}
+
+          echo "Checking $API_URL/api/health"
+          ok=
+          for i in $(seq 1 24); do
+            code=$(curl -sS -o /tmp/health.json -w "%{http_code}" "$API_URL/api/health" || true)
+            if [ "$code" = "200" ]; then
+              ok=1
+              break
+            fi
+            echo "attempt $i: HTTP $code (API may be waking)"
+            sleep 10
+          done
+          if [ -z "$ok" ]; then
+            echo "API did not return 200"
+            cat /tmp/health.json || true
+            exit 1
+          fi
+          cat /tmp/health.json
+          grep -q '"status":"ok"' /tmp/health.json
+
+          echo "Checking browser-style request (Origin: $WEB_URL)"
+          code=$(curl -sS -o /tmp/cors.json -w "%{http_code}" \
+            -H "Origin: $WEB_URL" \
+            -H "Accept: application/json" \
+            "$API_URL/api/health" || true)
+          echo "Origin check HTTP $code"
+          cat /tmp/cors.json || true
+          if [ "$code" != "200" ]; then
+            echo "API rejected a request that looks like it came from the website (HTTP $code)."
+            echo "This is the failure unit tests cannot see."
+            exit 1
+          fi
